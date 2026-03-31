@@ -11,6 +11,7 @@ from typing import Any
 import requests
 
 from .exceptions import AIAnalysisError
+from .config import get_runtime_config
 from .risk import calculate_risk, keyword_detect
 
 SCAM_ANALYSIS_PROMPT_TEMPLATE = """You are a scam detection AI.
@@ -147,19 +148,27 @@ def _gemini_analyze(text: str) -> dict[str, Any]:
 
 
 def _simulate_response(text: str) -> dict[str, Any]:
+    config = get_runtime_config()
+    categories = config["categories"]
+
     keywords = keyword_detect(text)
     risk = calculate_risk(text, keywords)
     score = int(risk["score"])
+    keyword_set = set(keywords)
 
     reasons: list[str] = []
-    if any(k in keywords for k in ["โอนเงิน", "บัญชี", "ธนาคาร"]):
+    if keyword_set & categories["financial"]:
         reasons.append("พบเจตนาทางการเงินหรือคำที่เกี่ยวกับบัญชี")
-    if any(k in keywords for k in ["ด่วน", "รีบ", "ทันที"]):
+    if keyword_set & categories["urgency"]:
         reasons.append("พบแรงกดดันด้านเวลา")
-    if any(k in keywords for k in ["OTP", "รหัส", "ยืนยันตัวตน"]):
+    if keyword_set & categories["sensitive"]:
         reasons.append("พบการร้องขอข้อมูลอ่อนไหว")
-    if "เจ้าหน้าที่" in keywords:
+    if keyword_set & categories["impersonation"]:
         reasons.append("มีการอ้างตัวเป็นเจ้าหน้าที่")
+    if keyword_set & categories["link_install"]:
+        reasons.append("มีการชวนกดลิงก์หรือติดตั้งแอปที่เสี่ยง")
+    if keyword_set & categories["legal_threat"]:
+        reasons.append("มีการข่มขู่ทางกฎหมายหรือระงับบัญชี")
 
     if not reasons:
         reasons.append("ไม่พบสัญญาณหลอกลวงที่ชัดเจนจากคีย์เวิร์ด")

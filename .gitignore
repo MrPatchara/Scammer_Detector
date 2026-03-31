@@ -37,6 +37,8 @@ Thumbs.db
 
 # Runtime outputs
 *_analysis.json
+correction_learning.db
+correction_learning.json
 
 # Logs
 *.log

@@ -70,4 +70,10 @@ def launch_ui() -> None:
             outputs=[transcript_out, summary_out, ai_json_out, full_json_out],
         )
 
-    demo.launch(server_name="127.0.0.1", server_port=7860, inbrowser=True)
+    demo.launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        inbrowser=True,
+        share=False,
+        quiet=True,
+    )
