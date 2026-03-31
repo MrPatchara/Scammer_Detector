@@ -140,6 +140,11 @@ When prompted, press Enter to start recording. The script will:
 - Detect and alert on scams in real-time
 - Save results to `./mic_results/`
 
+**Auto-detection:** The script automatically tries these devices in order:
+1. Stereo Mix (captures all PC speaker audio) — best quality
+2. First available microphone — fallback
+3. Manual device selection via `REALTIME_MIC_DEVICE` env var
+
 Recommended mic settings:
 
 ```bash
@@ -149,9 +154,14 @@ $env:REALTIME_MIC_OVERLAP_RATIO="0.5"
 $env:REALTIME_MIC_AI_GATE_SCORE="45"
 $env:REALTIME_MIC_AI_TRIGGERS="otp,โอนเงิน,เจ้าหน้าที่,บัญชี"
 $env:REALTIME_MIC_ALERT_COOLDOWN_SECONDS="15"
-$env:REALTIME_MIC_DEVICE="-1"              # -1 = default device
+$env:REALTIME_MIC_DEVICE="-1"              # -1 = auto-detect (recommended)
 $env:REALTIME_MIC_SAMPLE_RATE="16000"     # Hz
 $env:REALTIME_MIC_OUTPUT_DIR="./mic_results"
+```
+
+Then run:
+```bash
+python realtime_pc_mic.py
 ```
 
 ### Setup (Windows)
@@ -161,27 +171,26 @@ $env:REALTIME_MIC_OUTPUT_DIR="./mic_results"
    pip install sounddevice
    ```
 
-2. Set default recording device:
-   - Right-click speaker icon → Open Sound settings
-   - Scroll to "Advanced" → App volume and device preferences
-   - Find Python → Set to the microphone capturing your phone's speaker
-   - (Or physically move the USB mic closer to your phone speaker)
+2. (Optional) Enable "Stereo Mix" to capture better audio from phone speaker:
+   - Right-click speaker icon → "Open Sound settings"
+   - Scroll to "Advanced" → "App volume and device preferences"
+   - Find "Stereo Mix (Realtek)" or similar and enable it
+   - If Stereo Mix not available, use the physical microphone instead
 
-3. Verify mic works:
+3. List available devices (for reference):
    ```bash
-   python -m sounddevice
-   # Shows all audio devices. Note the device number for your mic.
-   # Set REALTIME_MIC_DEVICE=<number> if not using default.
+   python -c "import sounddevice as sd; print(sd.query_devices())"
    ```
 
 ### Pros & Cons
 
 | Mic Approach | File Approach |
 |---|---|
-| ✓ No file transfer | ✗ Need to move chunks |
-| ✓ Real-time capture | ✓ Can batch transfer |
-| ✗ Room noise affects accuracy | ✓ Cleaner audio |
-| ✗ Phone must stay nearby | ✓ Phone can be elsewhere |
+| ✓ No file transfer needed | ✗ Requires moving chunks |
+| ✓ Real-time capture from speaker | ✓ Can batch transfer files |
+| ✗ Room noise may affect accuracy | ✓ Cleaner audio (no background) |
+| ✗ Phone must stay nearby PC | ✓ Phone can be elsewhere |
+| ✓ Simplest setup | ✓ More controlled environment |
 
 ## Quick Start (Recommended)
 
