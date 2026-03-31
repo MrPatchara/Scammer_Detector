@@ -323,7 +323,7 @@ def _load_external_config() -> dict[str, Any]:
         return {}
 
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8-sig")
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             return {}
@@ -446,7 +446,7 @@ def load_thai_stt_corrections() -> dict[str, str]:
     
     if json_path.exists():
         try:
-            with open(json_path, "r", encoding="utf-8") as f:
+            with open(json_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             # Flatten nested structure: common_errors -> category -> {wrong: correct}
             corrections = {}

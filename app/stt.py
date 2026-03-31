@@ -84,7 +84,7 @@ class WhisperThaiTranscriber:
         payload: dict[str, Any] = {"common_errors": {}}
         if self._corrections_json_path.exists():
             try:
-                with open(self._corrections_json_path, "r", encoding="utf-8") as f:
+                with open(self._corrections_json_path, "r", encoding="utf-8-sig") as f:
                     loaded = json.load(f)
                 if isinstance(loaded, dict):
                     payload = loaded

@@ -85,6 +85,104 @@ python main.py test.wav
 python main.py test.mp3
 ```
 
+## Realtime on PC (Phone -> PC -> Telegram)
+
+Run this file on PC:
+
+```bash
+python realtime_pc.py
+```
+
+This mode keeps the same STT + correction + keyword/rule core and adds:
+
+- chunked realtime processing
+- sliding window with overlap
+- AI gate for cost/latency control
+- Telegram alert cooldown
+
+Recommended realtime settings:
+
+```bash
+$env:REALTIME_CHUNK_SECONDS="2"
+$env:REALTIME_WINDOW_SECONDS="8"
+$env:REALTIME_OVERLAP_RATIO="0.5"
+$env:REALTIME_AI_GATE_SCORE="45"
+$env:REALTIME_AI_TRIGGERS="otp,โอนเงิน,เจ้าหน้าที่,บัญชี"
+$env:REALTIME_ALERT_COOLDOWN_SECONDS="15"
+$env:REALTIME_INPUT_DIR="./incoming_chunks"
+```
+
+### How phone audio reaches PC
+
+`realtime_pc.py` reads chunk files from `REALTIME_INPUT_DIR`.
+
+Common paths to feed chunks from phone:
+
+1. Phone app records 2-3s chunks and uploads/copies to shared folder on PC.
+2. Sync tool (e.g., Syncthing) mirrors chunk files from phone folder to PC folder.
+3. A phone companion script/app sends chunk files to PC over local network.
+
+As soon as files appear in the folder, realtime analysis starts automatically.
+
+## Realtime on PC with Microphone (Direct Speaker -> PC Mic)
+
+**Alternative: No file transfer needed!** Place the phone on speaker and let the PC microphone pick up the audio.
+
+Run this file on PC:
+
+```bash
+python realtime_pc_mic.py
+```
+
+When prompted, press Enter to start recording. The script will:
+- Continuously record from the default PC microphone
+- Build a sliding window every 2-3 seconds
+- Detect and alert on scams in real-time
+- Save results to `./mic_results/`
+
+Recommended mic settings:
+
+```bash
+$env:REALTIME_MIC_CHUNK_SECONDS="2"
+$env:REALTIME_MIC_WINDOW_SECONDS="8"
+$env:REALTIME_MIC_OVERLAP_RATIO="0.5"
+$env:REALTIME_MIC_AI_GATE_SCORE="45"
+$env:REALTIME_MIC_AI_TRIGGERS="otp,โอนเงิน,เจ้าหน้าที่,บัญชี"
+$env:REALTIME_MIC_ALERT_COOLDOWN_SECONDS="15"
+$env:REALTIME_MIC_DEVICE="-1"              # -1 = default device
+$env:REALTIME_MIC_SAMPLE_RATE="16000"     # Hz
+$env:REALTIME_MIC_OUTPUT_DIR="./mic_results"
+```
+
+### Setup (Windows)
+
+1. Install sounddevice (if not already in requirements.txt):
+   ```bash
+   pip install sounddevice
+   ```
+
+2. Set default recording device:
+   - Right-click speaker icon → Open Sound settings
+   - Scroll to "Advanced" → App volume and device preferences
+   - Find Python → Set to the microphone capturing your phone's speaker
+   - (Or physically move the USB mic closer to your phone speaker)
+
+3. Verify mic works:
+   ```bash
+   python -m sounddevice
+   # Shows all audio devices. Note the device number for your mic.
+   # Set REALTIME_MIC_DEVICE=<number> if not using default.
+   ```
+
+### Pros & Cons
+
+| Mic Approach | File Approach |
+|---|---|
+| ✓ No file transfer | ✗ Need to move chunks |
+| ✓ Real-time capture | ✓ Can batch transfer |
+| ✗ Room noise affects accuracy | ✓ Cleaner audio |
+| ✗ Phone must stay nearby | ✓ Phone can be elsewhere |
+
 ## Quick Start (Recommended)
 
 1. Install dependencies
