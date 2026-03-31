@@ -570,7 +570,9 @@ Total Calls: {stats['total_calls']}
             next_chunk_id += 1
             window_chunks.append(chunk)
 
+            # Show progress while building window
             if len(window_chunks) < required_chunks:
+                print(f"🔄 Recording chunk {len(window_chunks)}/{required_chunks}...", end="\r")
                 continue
 
             # Build window and check for new data
@@ -598,11 +600,31 @@ Total Calls: {stats['total_calls']}
             risk_score = result.get("risk_score", 0)
             is_scam = result.get("ai_analysis", {}).get("is_scam", False)
 
+            # Format console output
+            text_preview = result.get("transcribed_text", "")[:100]
+            keywords = result.get("keywords_found", [])
+            ai_result = result.get("ai_analysis", {})
+            ai_reason = ai_result.get("reason", "No reason provided")
+            
+            # Print analysis result
+            risk_emoji = "🔴" if risk_level == "high" else "🟡" if risk_level == "medium" else "🟢"
+            now_dt = datetime.now()
+            
+            print(f"\n[{now_dt.strftime('%H:%M:%S')}] {'─' * 68}")
+            print(f"📊 Analysis: {risk_emoji} {risk_level.upper()} ({risk_score}/100)")
+            if text_preview:
+                print(f"🎙️  Text: {text_preview}{'...' if len(result.get('transcribed_text', '')) > 100 else ''}")
+            if keywords:
+                print(f"🔍 Keywords: {', '.join(keywords)}")
+            if ai_reason:
+                print(f"🤖 Reason: {ai_reason}")
+
             should_send_alert = is_scam and (
                 now_time - last_alert_time
             ) >= CONFIG.alert_cooldown_seconds
 
             if should_send_alert:
+                print(f"🚨 SENDING TELEGRAM ALERT...")
                 # Send Telegram alert
                 msg = _format_telegram_message(result, str(merged))
                 try:
@@ -615,7 +637,6 @@ Total Calls: {stats['total_calls']}
                 last_alert_time = now_time
 
                 # Log to database
-                now_dt = datetime.now()
                 event = AlertEvent(
                     timestamp=now_time,
                     datetime_str=now_dt.strftime("%Y-%m-%d %H:%M:%S"),
@@ -631,12 +652,10 @@ Total Calls: {stats['total_calls']}
                 )
                 alert_id = db.insert_alert(event)
                 db.update_daily_stats(now_dt.strftime("%Y-%m-%d"), risk_level, True)
-                print(
-                    f"[{now_dt.strftime('%H:%M:%S')}] 🚨 ALERT #{alert_id}: {risk_level.upper()} ({risk_score})"
-                )
+                print(f"✅ Alert #{alert_id} logged and sent")
             else:
                 # Log stats even if no alert
-                date_str = datetime.now().strftime("%Y-%m-%d")
+                date_str = now_dt.strftime("%Y-%m-%d")
                 db.update_daily_stats(date_str, risk_level, False)
 
             # Move window forward
