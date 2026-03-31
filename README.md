@@ -166,21 +166,45 @@ python realtime_pc_mic.py
 
 ### Setup (Windows)
 
-1. Install sounddevice (if not already in requirements.txt):
-   ```bash
-   pip install sounddevice
-   ```
+**Step 1: Enable Stereo Mix (IMPORTANT for best quality)**
 
-2. (Optional) Enable "Stereo Mix" to capture better audio from phone speaker:
-   - Right-click speaker icon → "Open Sound settings"
-   - Scroll to "Advanced" → "App volume and device preferences"
-   - Find "Stereo Mix (Realtek)" or similar and enable it
-   - If Stereo Mix not available, use the physical microphone instead
+Stereo Mix captures all PC speaker audio, so you don't need a physical mic next to the speaker.
 
-3. List available devices (for reference):
-   ```bash
-   python -c "import sounddevice as sd; print(sd.query_devices())"
-   ```
+1. Right-click the **speaker icon** (bottom-right) → **"Open Sound settings"**
+2. Scroll down to **"Advanced"** section
+3. Look for **"Stereo Mix"** or **"What U Hear"** or **"Microphone" (labeled as recording device)**
+4. If you see "Stereo Mix":
+   - Right-click → **Enable** (if disabled, it may show a warning—that's normal)
+   - If missing → It might not be available on your motherboard (use physical mic instead)
+
+**If Stereo Mix is not available:**
+- Use the **physical microphone** (default fallback in script)
+- Place it near the phone speaker or use speaker-phone mode
+- Audio quality may be lower due to background noise
+
+**Step 2: Install sounddevice**
+
+```bash
+pip install sounddevice
+```
+
+**Step 3: Verify the setup**
+
+```bash
+python -c "import sounddevice as sd; print(sd.query_devices())"
+# Look for "Stereo Mix" or verify your mic appears in the list
+```
+
+**Step 4: Run the monitor**
+
+```bash
+python realtime_pc_mic.py
+```
+
+The script will use:
+1. Stereo Mix (if available) ← **Best quality** 
+2. First available microphone (fallback)
+3. Microsoft Sound Mapper (Windows default fallback)
 
 ### Pros & Cons
 
@@ -191,6 +215,34 @@ python realtime_pc_mic.py
 | ✗ Room noise may affect accuracy | ✓ Cleaner audio (no background) |
 | ✗ Phone must stay nearby PC | ✓ Phone can be elsewhere |
 | ✓ Simplest setup | ✓ More controlled environment |
+
+### Performance & Accuracy Tips
+
+**For better real-time accuracy:**
+
+1. **Use Stereo Mix** (if available) → captures PC speaker audio at full quality
+2. **Keep room quiet** → reduce background noise affecting Whisper STT
+3. **Phone close to speaker** → strong signal = better transcription
+4. **Increase window seconds** if you need more context:
+   ```bash
+   $env:REALTIME_MIC_WINDOW_SECONDS="10"  # Default: 8
+   ```
+
+**If running slow (high CPU):**
+
+- Reduce chunk size (faster processing):
+  ```bash
+  $env:REALTIME_MIC_CHUNK_SECONDS="1"  # Default: 2 (faster but less robust)
+  ```
+- Close other apps consuming CPU
+- The script does **per-chunk STT** (transcribes 2-3s chunks immediately) which is faster than full window STT
+
+**Current architecture (latest version):**
+- ✓ Records audio chunks (2s each)
+- ✓ Immediately transcribes each chunk (no waiting)
+- ✓ Combines text from chunks
+- ✓ Analyzes combined text for scam keywords
+- ✓ Near real-time alerts (~3-5s latency)
 
 ## Quick Start (Recommended)
 

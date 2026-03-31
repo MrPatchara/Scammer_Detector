@@ -212,12 +212,27 @@ def _record_chunk(config: RealtimeConfig, duration: float, chunk_id: int) -> Aud
     )
 
 
-def _merge_window_chunks(chunks: list[AudioChunk]) -> Path:
-    """Merge multiple audio chunks into a single WAV file."""
+def _merge_window_chunks(chunks: list[AudioChunk]) -> tuple[Path, list[str]]:
+    """Merge multiple audio chunks into a single WAV file AND do per-chunk STT.
+    
+    Returns: (merged_wav_path, list_of_transcribed_texts)
+    This allows us to do STT in parallel with recording (faster real-time response).
+    """
     if not chunks:
         raise ValueError("No chunks to merge")
 
-    # Concatenate all audio data
+    # Transcribe each chunk immediately (non-blocking)
+    texts: list[str] = []
+    for chunk in chunks:
+        tmp_file = chunk.to_wav_temp()
+        try:
+            text = speech_to_text(str(tmp_file))
+            if text.strip():
+                texts.append(text.strip())
+        finally:
+            tmp_file.unlink(missing_ok=True)
+
+    # Also concatenate all audio data for potential re-analysis
     all_audio = np.concatenate([c.audio_data for c in chunks])
     sample_rate = chunks[0].sample_rate
 
@@ -239,11 +254,36 @@ def _merge_window_chunks(chunks: list[AudioChunk]) -> Path:
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(audio_int16.tobytes())
 
-    return out_file
+    return out_file, texts
 
 
-def _build_result(audio_file: Path, cooldown_ok: bool) -> dict[str, Any]:
-    text = speech_to_text(str(audio_file))
+def _build_result(audio_file: Path, transcribed_texts: list[str], cooldown_ok: bool) -> dict[str, Any]:
+    """Build analysis result from pre-transcribed text chunks."""
+    # Combine all chunk texts
+    text = " ".join(transcribed_texts)
+    
+    if not text.strip():
+        return {
+            "transcribed_text": "",
+            "keywords_found": [],
+            "risk_score": 0,
+            "risk_level": "low",
+            "ai_analysis": {
+                "risk_level": "low",
+                "score": 0,
+                "is_scam": False,
+                "reason": "No speech detected",
+                "source": "empty_audio",
+            },
+            "telegram_alert": {"sent": False, "reason": "no_speech"},
+            "realtime": {
+                "used_ai": False,
+                "cooldown_ok": cooldown_ok,
+                "source": "microphone",
+                "chunks_merged": len(transcribed_texts),
+            },
+        }
+    
     keywords = keyword_detect(text)
     risk = calculate_risk(text, keywords)
 
@@ -274,6 +314,7 @@ def _build_result(audio_file: Path, cooldown_ok: bool) -> dict[str, Any]:
             "used_ai": use_ai,
             "cooldown_ok": cooldown_ok,
             "source": "microphone",
+            "chunks_merged": len(transcribed_texts),
         },
     }
 
@@ -387,12 +428,12 @@ def run_realtime_monitor() -> None:
             last_window_digest = digest
 
             # Merge chunks and analyze
-            merged = _merge_window_chunks(latest_window)
+            merged, texts = _merge_window_chunks(latest_window)
             now = time.time()
             cooldown_ok = (now - last_alert_at) >= CONFIG.alert_cooldown_seconds
 
             try:
-                result = _build_result(merged, cooldown_ok=cooldown_ok)
+                result = _build_result(merged, texts, cooldown_ok=cooldown_ok)
             finally:
                 merged.unlink(missing_ok=True)
 
