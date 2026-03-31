@@ -26,13 +26,13 @@ To manually select a device, list them first:
 Then set env var: REALTIME_MIC_DEVICE=<number>
 
 Environment variables (recommended defaults):
-    REALTIME_MIC_CHUNK_SECONDS=2
-    REALTIME_MIC_WINDOW_SECONDS=8
+    REALTIME_MIC_CHUNK_SECONDS=1.5          # Shorter = faster STT
+    REALTIME_MIC_WINDOW_SECONDS=6
     REALTIME_MIC_OVERLAP_RATIO=0.5
     REALTIME_MIC_AI_GATE_SCORE=45
     REALTIME_MIC_AI_TRIGGERS=otp,โอนเงิน,เจ้าหน้าที่,บัญชี
     REALTIME_MIC_ALERT_COOLDOWN_SECONDS=15
-    REALTIME_MIC_DEVICE=-1  (-1=auto-detect, or use device number)
+    REALTIME_MIC_DEVICE=-1  (-1=auto-detect with priority: Stereo Mix > Physical Mic)
     REALTIME_MIC_SAMPLE_RATE=16000
     REALTIME_MIC_KEEP_CHUNKS=80
     REALTIME_MIC_OUTPUT_DIR=./mic_results
@@ -65,24 +65,41 @@ def _find_default_input_device() -> int:
     
     Priority:
     1. Device with 'Stereo Mix' (captures all PC audio)
-    2. Default input device with >0 channels
-    3. First available input device
+    2. Physical microphone (Realtek, USB, etc.)
+    3. Avoid Sound Mapper (device 0) - too low quality
+    
+    Returns device ID or raises error if none found.
     """
     devices = sd.query_devices()
     
     # Try to find Stereo Mix first
     for i, dev in enumerate(devices):
         if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
-            if 'stereo mix' in dev.get('name', '').lower():
+            name_lower = dev.get('name', '').lower()
+            if 'stereo mix' in name_lower or 'what u hear' in name_lower:
                 return i
     
-    # Fall back to any input device
+    # Try physical microphones (Realtek, USB, etc.) - skip Sound Mapper (device 0)
+    microphone_keywords = ['microphone', 'mic in', 'audio input', 'realtek', 'usb']
     for i, dev in enumerate(devices):
+        if i == 0:  # Skip Sound Mapper - too low quality
+            continue
+        if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
+            name_lower = dev.get('name', '').lower()
+            if any(kw in name_lower for kw in microphone_keywords):
+                return i
+    
+    # Last resort: any input device except 0
+    for i, dev in enumerate(devices):
+        if i == 0:  # Skip Sound Mapper
+            continue
         if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
             return i
     
-    # Last resort: device 1 (common default)
-    return 1
+    raise RuntimeError(
+        "No suitable input device found. "
+        "Please enable 'Stereo Mix' in Windows Sound settings or connect a microphone."
+    )
 
 
 @dataclass
@@ -107,13 +124,44 @@ class AudioChunk:
     created_at: float
     chunk_id: int  # Sequential ID for ordering
 
+    def _denoise(self) -> np.ndarray:
+        """Reduce noise by trimming low-energy silence and normalizing."""
+        audio = self.audio_data.copy()
+        
+        # Normalize to [-1, 1]
+        max_val = np.max(np.abs(audio))
+        if max_val > 0:
+            audio = audio / max_val
+        
+        # Trim silence from start/end (energy below threshold)
+        threshold = 0.02
+        energy = np.abs(audio)
+        active = energy > threshold
+        
+        if np.any(active):
+            active_indices = np.where(active)[0]
+            start = max(0, active_indices[0] - int(0.1 * self.sample_rate))
+            end = min(len(audio), active_indices[-1] + int(0.1 * self.sample_rate))
+            audio = audio[start:end]
+        
+        # Normalize loudness
+        if len(audio) > 0:
+            rms = np.sqrt(np.mean(audio ** 2))
+            if rms > 0:
+                audio = audio / rms * 0.3  # Target RMS ~0.3
+        
+        return audio
+    
     def to_wav_temp(self) -> Path:
-        """Write chunk to temporary WAV file for processing."""
+        """Write cleaned chunk to temporary WAV file for processing."""
         tmp_dir = Path(tempfile.gettempdir())
         tmp_file = tmp_dir / f"mic_chunk_{int(time.time() * 1000)}_{self.chunk_id}.wav"
         
+        # Clean audio
+        audio_cleaned = self._denoise()
+        
         # Convert float32 to int16
-        audio_int16 = (self.audio_data * 32767).astype(np.int16)
+        audio_int16 = (audio_cleaned * 32767).astype(np.int16)
         
         # Write WAV file using wave module
         with wave.open(str(tmp_file), 'wb') as wav_file:
@@ -142,8 +190,8 @@ def _env_float(name: str, default: float) -> float:
 
 
 def load_config() -> RealtimeConfig:
-    chunk_seconds = max(1, _env_int("REALTIME_MIC_CHUNK_SECONDS", 2))
-    window_seconds = max(chunk_seconds, _env_int("REALTIME_MIC_WINDOW_SECONDS", 8))
+    chunk_seconds = max(1, _env_float("REALTIME_MIC_CHUNK_SECONDS", 1.5))
+    window_seconds = max(chunk_seconds, _env_int("REALTIME_MIC_WINDOW_SECONDS", 6))
     overlap_ratio = _env_float("REALTIME_MIC_OVERLAP_RATIO", 0.5)
     overlap_ratio = max(0.0, min(overlap_ratio, 0.9))
 
@@ -183,9 +231,12 @@ def _record_chunk(config: RealtimeConfig, duration: float, chunk_id: int) -> Aud
     except Exception as exc:
         print(f"ERROR recording from device {config.device_id}: {exc}")
         print("Trying fallback device...")
-        # Try first available input device
+        # Try first available input device (skip device 0)
         devices = sd.query_devices()
+        found = False
         for i, dev in enumerate(devices):
+            if i == 0:  # Skip Sound Mapper
+                continue
             if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
                 try:
                     audio = sd.rec(
@@ -198,11 +249,12 @@ def _record_chunk(config: RealtimeConfig, duration: float, chunk_id: int) -> Aud
                     )
                     config.device_id = i
                     print(f"✓ Switched to device {i} ({dev['name']})")
+                    found = True
                     break
                 except Exception:
                     continue
-        else:
-            raise RuntimeError("No working input device found")
+        if not found:
+            raise RuntimeError("No working input device found. Enable 'Stereo Mix' in Windows Sound settings.")
     
     return AudioChunk(
         audio_data=audio.flatten(),
@@ -370,7 +422,7 @@ def run_realtime_monitor() -> None:
     try:
         # Verify microphone is accessible
         print("Testing microphone access...")
-        sd.rec(
+        test_audio = sd.rec(
             CONFIG.sample_rate,
             samplerate=CONFIG.sample_rate,
             channels=1,
@@ -380,14 +432,25 @@ def run_realtime_monitor() -> None:
         print("✓ Microphone OK. Place phone on speaker and press Enter to start recording...")
         input()
     except Exception as exc:
-        print(f"Device {CONFIG.device_id} failed: {exc}")
-        print("Trying to find alternative input device...")
+        dev_name = sd.query_devices()[CONFIG.device_id]['name'] if CONFIG.device_id < len(sd.query_devices()) else "Unknown"
+        print(f"Device {CONFIG.device_id} ({dev_name}) failed: {exc}")
+        print("\n⚠️  PLEASE ENABLE 'STEREO MIX' IN WINDOWS:")
+        print("  1. Right-click speaker icon (bottom-right)")
+        print("  2. Click 'Open Sound settings'")
+        print("  3. Scroll to 'Advanced' section")
+        print("  4. Look for 'Stereo Mix' or 'What U Hear'")
+        print("  5. Right-click → Enable (if disabled)")
+        print("\n(Or connect a quality microphone, then restart script)")
+        print("\nSearching for alternative devices...")
+        
         found = False
         devices = sd.query_devices()
         for i, dev in enumerate(devices):
+            if i == 0:  # Skip Sound Mapper
+                continue
             if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
                 try:
-                    sd.rec(
+                    test_audio = sd.rec(
                         CONFIG.sample_rate,
                         samplerate=CONFIG.sample_rate,
                         channels=1,
@@ -395,7 +458,7 @@ def run_realtime_monitor() -> None:
                         blocking=True,
                     )
                     CONFIG.device_id = i
-                    print(f"✓ Using device {i} ({dev['name']})")
+                    print(f"✓ Found & using device {i} ({dev['name']})")
                     print("✓ Microphone OK. Place phone on speaker and press Enter to start recording...")
                     input()
                     found = True
@@ -403,7 +466,8 @@ def run_realtime_monitor() -> None:
                 except Exception:
                     continue
         if not found:
-            print("ERROR: No working input device found")
+            print("\n❌ ERROR: No working input device found.")
+            print("You MUST enable 'Stereo Mix' in Windows Sound settings.")
             return
 
     while True:
