@@ -11,8 +11,19 @@ How it works:
 
 Setup:
 1. Install sounddevice: pip install sounddevice
-2. In Windows: Set your default recording device to the mic picking up the speaker.
+2. Enable "Stereo Mix" on Windows to capture PC speaker audio:
+   - Right-click speaker icon → "Open Sound settings"
+   - Scroll down to "Advanced" → "App volume and device preferences"
+   - Find "Stereo Mix (Realtek)" or similar and enable it
+   - (Or use physical microphone if Stereo Mix not available)
 3. Run: python realtime_pc_mic.py
+
+The script auto-detects the best input device (Stereo Mix > Microphone > Default).
+To manually select a device, list them first:
+
+   python -c "import sounddevice as sd; print(sd.query_devices())"
+
+Then set env var: REALTIME_MIC_DEVICE=<number>
 
 Environment variables (recommended defaults):
     REALTIME_MIC_CHUNK_SECONDS=2
@@ -21,7 +32,7 @@ Environment variables (recommended defaults):
     REALTIME_MIC_AI_GATE_SCORE=45
     REALTIME_MIC_AI_TRIGGERS=otp,โอนเงิน,เจ้าหน้าที่,บัญชี
     REALTIME_MIC_ALERT_COOLDOWN_SECONDS=15
-    REALTIME_MIC_DEVICE=-1  (-1=default, or use: python -m sounddevice to list)
+    REALTIME_MIC_DEVICE=-1  (-1=auto-detect, or use device number)
     REALTIME_MIC_SAMPLE_RATE=16000
     REALTIME_MIC_KEEP_CHUNKS=80
     REALTIME_MIC_OUTPUT_DIR=./mic_results
@@ -47,6 +58,31 @@ from app.ai_analysis import ai_analyze
 from app.alerts import send_telegram_alert, should_alert
 from app.risk import calculate_risk, keyword_detect
 from app.stt import speech_to_text
+
+
+def _find_default_input_device() -> int:
+    """Find the best input device for capturing audio on Windows.
+    
+    Priority:
+    1. Device with 'Stereo Mix' (captures all PC audio)
+    2. Default input device with >0 channels
+    3. First available input device
+    """
+    devices = sd.query_devices()
+    
+    # Try to find Stereo Mix first
+    for i, dev in enumerate(devices):
+        if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
+            if 'stereo mix' in dev.get('name', '').lower():
+                return i
+    
+    # Fall back to any input device
+    for i, dev in enumerate(devices):
+        if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
+            return i
+    
+    # Last resort: device 1 (common default)
+    return 1
 
 
 @dataclass
@@ -114,6 +150,10 @@ def load_config() -> RealtimeConfig:
     trigger_raw = os.getenv("REALTIME_MIC_AI_TRIGGERS", "otp,โอนเงิน,เจ้าหน้าที่,บัญชี")
     ai_triggers = {x.strip().lower() for x in trigger_raw.split(",") if x.strip()}
 
+    device_id = _env_int("REALTIME_MIC_DEVICE", -1)
+    if device_id < 0:
+        device_id = _find_default_input_device()
+
     return RealtimeConfig(
         chunk_seconds=chunk_seconds,
         window_seconds=window_seconds,
@@ -121,7 +161,7 @@ def load_config() -> RealtimeConfig:
         ai_gate_score=max(0, _env_int("REALTIME_MIC_AI_GATE_SCORE", 45)),
         ai_triggers=ai_triggers,
         alert_cooldown_seconds=max(1, _env_int("REALTIME_MIC_ALERT_COOLDOWN_SECONDS", 15)),
-        device_id=_env_int("REALTIME_MIC_DEVICE", -1),
+        device_id=device_id,
         sample_rate=max(8000, _env_int("REALTIME_MIC_SAMPLE_RATE", 16000)),
         keep_chunks=max(10, _env_int("REALTIME_MIC_KEEP_CHUNKS", 80)),
         output_dir=Path(os.getenv("REALTIME_MIC_OUTPUT_DIR", "mic_results")).resolve(),
@@ -131,14 +171,39 @@ def load_config() -> RealtimeConfig:
 def _record_chunk(config: RealtimeConfig, duration: float, chunk_id: int) -> AudioChunk:
     """Record audio from microphone for specified duration."""
     print(f"[chunk {chunk_id}] recording {duration:.1f}s from device {config.device_id}...")
-    audio = sd.rec(
-        int(config.sample_rate * duration),
-        samplerate=config.sample_rate,
-        channels=1,
-        device=config.device_id,
-        dtype=np.float32,
-        blocking=True,
-    )
+    try:
+        audio = sd.rec(
+            int(config.sample_rate * duration),
+            samplerate=config.sample_rate,
+            channels=1,
+            device=config.device_id,
+            dtype=np.float32,
+            blocking=True,
+        )
+    except Exception as exc:
+        print(f"ERROR recording from device {config.device_id}: {exc}")
+        print("Trying fallback device...")
+        # Try first available input device
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
+                try:
+                    audio = sd.rec(
+                        int(config.sample_rate * duration),
+                        samplerate=config.sample_rate,
+                        channels=1,
+                        device=i,
+                        dtype=np.float32,
+                        blocking=True,
+                    )
+                    config.device_id = i
+                    print(f"✓ Switched to device {i} ({dev['name']})")
+                    break
+                except Exception:
+                    continue
+        else:
+            raise RuntimeError("No working input device found")
+    
     return AudioChunk(
         audio_data=audio.flatten(),
         sample_rate=config.sample_rate,
@@ -253,6 +318,7 @@ def run_realtime_monitor() -> None:
     step_chunks = max(1, int(round(required_chunks * (1.0 - CONFIG.overlap_ratio))))
 
     print("Realtime microphone monitor started")
+    print(f"device={CONFIG.device_id} ({sd.query_devices()[CONFIG.device_id]['name']})")
     print(f"sample_rate={CONFIG.sample_rate}Hz chunk={CONFIG.chunk_seconds}s")
     print(
         f"window={CONFIG.window_seconds}s overlap={CONFIG.overlap_ratio:.2f} "
@@ -273,8 +339,31 @@ def run_realtime_monitor() -> None:
         print("✓ Microphone OK. Place phone on speaker and press Enter to start recording...")
         input()
     except Exception as exc:
-        print(f"ERROR: Microphone access failed: {exc}")
-        return
+        print(f"Device {CONFIG.device_id} failed: {exc}")
+        print("Trying to find alternative input device...")
+        found = False
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            if isinstance(dev, dict) and dev.get('max_input_channels', 0) > 0:
+                try:
+                    sd.rec(
+                        CONFIG.sample_rate,
+                        samplerate=CONFIG.sample_rate,
+                        channels=1,
+                        device=i,
+                        blocking=True,
+                    )
+                    CONFIG.device_id = i
+                    print(f"✓ Using device {i} ({dev['name']})")
+                    print("✓ Microphone OK. Place phone on speaker and press Enter to start recording...")
+                    input()
+                    found = True
+                    break
+                except Exception:
+                    continue
+        if not found:
+            print("ERROR: No working input device found")
+            return
 
     while True:
         try:
