@@ -6,7 +6,9 @@ Run: python realtime_file_ui.py
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,16 @@ from app.ai_analysis import ai_analyze
 from app.alerts import send_telegram_alert, should_alert
 from app.risk import calculate_risk, keyword_detect
 from app.stt import speech_to_text
+
+
+# Suppress asyncio warnings on Windows
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# Reduce verbose logging
+logging.getLogger("gradio").setLevel(logging.WARNING)
+logging.getLogger("gradio_client").setLevel(logging.WARNING)
 
 
 SUPPORTED_AUDIO = {'.wav', '.mp3', '.m4a', '.ogg', '.webm', '.mp4', '.flac'}
